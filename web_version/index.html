@@ -1,0 +1,75 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>MNIST 손글씨 숫자 인식</title>
+<style>
+body{font-family:system-ui,'Malgun Gothic',sans-serif;max-width:520px;margin:0 auto;padding:16px;text-align:center;background:#fafafa;color:#222}
+#id{font-size:1.2rem;font-weight:700;padding:10px;background:#1e3a8a;color:#fff;border-radius:8px;margin-bottom:16px}
+canvas{border:2px solid #333;border-radius:8px;background:#000;touch-action:none;max-width:100%;cursor:crosshair}
+button{font-size:1rem;padding:8px 18px;margin:8px 4px;border-radius:6px;border:1px solid #333;cursor:pointer}
+#result{font-size:3rem;font-weight:800;margin:8px}
+#status{color:#555;min-height:1.4em}
+.bar{display:flex;align-items:center;gap:6px;font-size:.85rem;margin:2px 0}
+.bar div{height:10px;background:#2563eb;border-radius:3px}
+.bar span:first-child{width:14px}
+</style>
+</head>
+<body>
+<div id="id">학번 2601965 이름 이승주</div>
+<h2>손글씨 숫자 인식 (MNIST)</h2>
+<div id="status">모델 불러오는 중...</div>
+<canvas id="c" width="280" height="280"></canvas><br>
+<button id="clear">지우기</button><button id="go">인식하기</button>
+<div id="result">?</div>
+<div id="bars"></div>
+<script src="infer.js"></script>
+<script>
+const cv=document.getElementById('c'),ctx=cv.getContext('2d'),st=document.getElementById('status');
+let net=null,drawing=false,lx=0,ly=0,timer=null;
+function reset(){ctx.fillStyle='#000';ctx.fillRect(0,0,280,280);ctx.strokeStyle='#fff';ctx.fillStyle='#fff';ctx.lineWidth=22;ctx.lineCap='round';ctx.lineJoin='round';}
+reset();
+function pos(e){const r=cv.getBoundingClientRect();return[(e.clientX-r.left)*280/r.width,(e.clientY-r.top)*280/r.height];}
+cv.addEventListener('pointerdown',e=>{if(!net)return;e.preventDefault();cv.setPointerCapture(e.pointerId);drawing=true;clearTimeout(timer);[lx,ly]=pos(e);ctx.beginPath();ctx.arc(lx,ly,11,0,7);ctx.fill();});
+cv.addEventListener('pointermove',e=>{if(!drawing)return;const ev=e.getCoalescedEvents?e.getCoalescedEvents():[e];for(const c of ev){const[x,y]=pos(c);ctx.beginPath();ctx.moveTo(lx,ly);ctx.lineTo(x,y);ctx.stroke();lx=x;ly=y;}});
+['pointerup','pointercancel'].forEach(t=>cv.addEventListener(t,()=>{if(drawing){drawing=false;timer=setTimeout(predict,150);}}));
+document.getElementById('clear').onclick=()=>{reset();document.getElementById('result').textContent='?';document.getElementById('bars').innerHTML='';};
+document.getElementById('go').onclick=predict;
+
+// 280x280 캔버스 -> MNIST 형식 28x28 (글씨를 20px로 맞추고 무게중심을 중앙으로)
+function preprocess(){
+  const d=ctx.getImageData(0,0,280,280).data;let x0=280,y0=280,x1=-1,y1=-1;
+  for(let y=0;y<280;y++)for(let x=0;x<280;x++)if(d[(y*280+x)*4]>40){if(x<x0)x0=x;if(x>x1)x1=x;if(y<y0)y0=y;if(y>y1)y1=y;}
+  if(x1<0)return null;
+  const w=x1-x0+1,h=y1-y0+1,s=20/Math.max(w,h),tw=Math.max(1,Math.round(w*s)),th=Math.max(1,Math.round(h*s));
+  const t=document.createElement('canvas');t.width=t.height=28;const tc=t.getContext('2d');
+  tc.fillStyle='#000';tc.fillRect(0,0,28,28);tc.imageSmoothingQuality='high';
+  tc.drawImage(cv,x0,y0,w,h,Math.round((28-tw)/2),Math.round((28-th)/2),tw,th);
+  const p=tc.getImageData(0,0,28,28).data;let m=0,cx=0,cy=0;
+  for(let y=0;y<28;y++)for(let x=0;x<28;x++){const v=p[(y*28+x)*4];m+=v;cx+=v*x;cy+=v*y;}
+  const dx=Math.round(13.5-cx/m),dy=Math.round(13.5-cy/m);
+  const t2=document.createElement('canvas');t2.width=t2.height=28;const c2=t2.getContext('2d');
+  c2.fillStyle='#000';c2.fillRect(0,0,28,28);c2.drawImage(t,dx,dy);
+  const q=c2.getImageData(0,0,28,28).data,a=new Float32Array(784);
+  for(let i=0;i<784;i++)a[i]=q[i*4]/255;
+  return a;
+}
+function predict(){
+  if(!net)return;const a=preprocess();if(!a)return;
+  const probs=MNISTNet.predict(net,a);let best=0;probs.forEach((p,i)=>{if(p>probs[best])best=i;});
+  document.getElementById('result').textContent=best;
+  document.getElementById('bars').innerHTML=[...probs].map((p,i)=>`<div class="bar"><span>${i}</span><div style="width:${Math.round(p*300)}px"></div><span>${(p*100).toFixed(1)}%</span></div>`).join('');
+}
+(async()=>{
+  cv.style.opacity=.4;
+  try{
+    const r=await fetch('weights.json');if(!r.ok)throw new Error('weights.json 없음 ('+r.status+')');
+    net=MNISTNet.load(await r.json());cv.style.opacity=1;st.textContent='준비 완료! 숫자를 그려보세요.';
+  }catch(e){
+    st.textContent='모델 파일을 불러오지 못했어요: '+e.message+'  (weights.json을 만들었는지, 파일을 더블클릭이 아닌 웹 주소로 열었는지 확인)';
+  }
+})();
+</script>
+</body>
+</html>
